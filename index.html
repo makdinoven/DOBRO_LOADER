@@ -54,7 +54,27 @@
     <button onclick="startAll()" class="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-sm font-bold transition shadow-md h-[40px]">
         ▶ СКАЧАТЬ ВЫБРАННЫЕ
     </button>
+
+    <button onclick="openS3Modal()" class="bg-orange-500 hover:bg-orange-600 text-white px-3 py-2 rounded-lg text-sm font-bold transition shadow-md h-[40px] flex items-center gap-1" title="Настройки S3/R2">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 10-9.78 2.096A4.001 4.001 0 003 15z"/></svg>
+        S3
+    </button>
 </div>
+    </div>
+
+    <!-- S3 панель под хедером -->
+    <div id="s3-bar" class="hidden bg-orange-50 border-b border-orange-200 px-4 py-2 flex items-center gap-4 text-sm">
+        <label class="flex items-center gap-2 cursor-pointer select-none">
+            <input type="checkbox" id="s3-enabled" class="w-4 h-4 text-orange-500 rounded border-orange-300 focus:ring-orange-500" onchange="toggleS3Bar()">
+            <span class="font-bold text-orange-700">S3</span>
+        </label>
+        <div class="flex items-center gap-1 flex-1">
+            <span class="text-orange-600 text-xs font-medium">Путь:</span>
+            <input type="text" id="s3-upload-path" placeholder="videos/course_name"
+                class="flex-1 text-xs bg-white border border-orange-200 rounded px-2 py-1 outline-none focus:ring-1 focus:ring-orange-400 text-slate-700"
+                disabled>
+        </div>
+        <span id="s3-status" class="text-[10px] text-orange-400 italic">не настроено</span>
     </div>
 
     <div class="flex flex-1 overflow-hidden min-h-0">
@@ -79,9 +99,162 @@
         </div>
     </div>
 
+    <!-- S3 модальное окно -->
+    <div id="s3-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+        <div class="bg-white rounded-xl shadow-2xl w-[440px] p-6">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="text-lg font-bold text-slate-800">Настройки S3 / Cloudflare R2</h3>
+                <button onclick="closeS3Modal()" class="text-slate-400 hover:text-slate-700 text-xl">&times;</button>
+            </div>
+            <div class="space-y-3">
+                <div>
+                    <label class="text-xs font-bold text-slate-600 block mb-1">Endpoint URL</label>
+                    <input type="text" id="s3-endpoint" placeholder="https://xxx.r2.cloudflarestorage.com"
+                        class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-400">
+                </div>
+                <div>
+                    <label class="text-xs font-bold text-slate-600 block mb-1">Access Key ID</label>
+                    <input type="text" id="s3-access-key" placeholder="Access Key"
+                        class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-400">
+                </div>
+                <div>
+                    <label class="text-xs font-bold text-slate-600 block mb-1">Secret Access Key</label>
+                    <input type="password" id="s3-secret-key" placeholder="Secret Key"
+                        class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-400">
+                </div>
+                <div>
+                    <label class="text-xs font-bold text-slate-600 block mb-1">Bucket</label>
+                    <input type="text" id="s3-bucket" placeholder="my-bucket"
+                        class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-400">
+                </div>
+                <div>
+                    <label class="text-xs font-bold text-slate-600 block mb-1">Путь по умолчанию (префикс)</label>
+                    <input type="text" id="s3-default-path" placeholder="videos/course_name"
+                        class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-400">
+                </div>
+            </div>
+            <div class="flex gap-2 mt-5">
+                <button onclick="saveS3Config()" class="flex-1 bg-orange-500 hover:bg-orange-600 text-white font-bold py-2 rounded-lg transition">
+                    СОХРАНИТЬ
+                </button>
+                <button onclick="clearS3Config()" class="bg-red-100 hover:bg-red-200 text-red-600 font-bold px-4 py-2 rounded-lg transition text-sm">
+                    СБРОСИТЬ
+                </button>
+            </div>
+            <p class="text-[10px] text-slate-400 mt-3 text-center">Данные хранятся локально в зашифрованном виде (AES-256)</p>
+        </div>
+    </div>
+
     <script>
         let tasks = {};
         let selectedFolder = null;
+
+        const translitMap = {
+            'а':'a','б':'b','в':'v','г':'g','д':'d','е':'e','ё':'yo','ж':'zh',
+            'з':'z','и':'i','й':'y','к':'k','л':'l','м':'m','н':'n','о':'o',
+            'п':'p','р':'r','с':'s','т':'t','у':'u','ф':'f','х':'kh','ц':'ts',
+            'ч':'ch','ш':'sh','щ':'shch','ъ':'','ы':'y','ь':'','э':'e','ю':'yu','я':'ya',
+            'є':'ye','і':'i','ї':'yi','ґ':'g',
+            'ä':'ae','ö':'oe','ü':'ue','ß':'ss','ñ':'n','ç':'c'
+        };
+
+        function normalizeName(str) {
+            let result = str.toLowerCase();
+            // Транслитерация кириллицы и спецсимволов других алфавитов
+            result = result.split('').map(ch => translitMap[ch] !== undefined ? translitMap[ch] : ch).join('');
+            // Убираем всё кроме латиницы, цифр, точек, дефисов
+            result = result.replace(/[^a-z0-9.\-]/g, '_');
+            // Схлопываем множественные подчёркивания
+            result = result.replace(/_+/g, '_');
+            // Убираем подчёркивания по краям
+            result = result.replace(/^_+|_+$/g, '');
+            return result;
+        }
+
+        // === S3 функции ===
+        async function openS3Modal() {
+            document.getElementById('s3-modal').classList.remove('hidden');
+            const config = await pywebview.api.load_s3_config();
+            if (config) {
+                document.getElementById('s3-endpoint').value = config.endpoint || '';
+                document.getElementById('s3-access-key').value = config.access_key || '';
+                document.getElementById('s3-secret-key').placeholder = config.secret_key_set ? '••••••••  (сохранён)' : 'Secret Key';
+                document.getElementById('s3-secret-key').value = '';
+                document.getElementById('s3-bucket').value = config.bucket || '';
+                document.getElementById('s3-default-path').value = config.s3_path || '';
+            }
+        }
+
+        function closeS3Modal() {
+            document.getElementById('s3-modal').classList.remove('hidden');
+            document.getElementById('s3-modal').classList.add('hidden');
+        }
+
+        async function saveS3Config() {
+            const endpoint = document.getElementById('s3-endpoint').value;
+            const accessKey = document.getElementById('s3-access-key').value;
+            const secretKey = document.getElementById('s3-secret-key').value;
+            const bucket = document.getElementById('s3-bucket').value;
+            const s3Path = document.getElementById('s3-default-path').value;
+
+            if (!endpoint || !accessKey || !bucket) {
+                alert('Заполните Endpoint, Access Key и Bucket');
+                return;
+            }
+
+            // Если секрет не введён заново — загружаем старый конфиг и берём оттуда
+            let finalSecret = secretKey;
+            if (!finalSecret) {
+                const existing = await pywebview.api.load_s3_config();
+                if (existing && existing.secret_key_set) {
+                    // Передаём пустую строку — Python сохранит старый
+                    alert('Введите Secret Key для сохранения');
+                    return;
+                }
+            }
+
+            await pywebview.api.save_s3_config(endpoint, accessKey, finalSecret, bucket, s3Path);
+            document.getElementById('s3-status').innerText = 'настроено';
+            document.getElementById('s3-status').classList.replace('text-orange-400', 'text-emerald-600');
+            document.getElementById('s3-upload-path').value = s3Path;
+            closeS3Modal();
+        }
+
+        async function clearS3Config() {
+            if (confirm('Удалить сохранённые S3 данные?')) {
+                await pywebview.api.clear_s3_config();
+                document.getElementById('s3-endpoint').value = '';
+                document.getElementById('s3-access-key').value = '';
+                document.getElementById('s3-secret-key').value = '';
+                document.getElementById('s3-secret-key').placeholder = 'Secret Key';
+                document.getElementById('s3-bucket').value = '';
+                document.getElementById('s3-default-path').value = '';
+                document.getElementById('s3-enabled').checked = false;
+                document.getElementById('s3-upload-path').disabled = true;
+                document.getElementById('s3-status').innerText = 'не настроено';
+                document.getElementById('s3-status').classList.replace('text-emerald-600', 'text-orange-400');
+                closeS3Modal();
+            }
+        }
+
+        function toggleS3Bar() {
+            const enabled = document.getElementById('s3-enabled').checked;
+            document.getElementById('s3-upload-path').disabled = !enabled;
+        }
+
+        async function initS3Bar() {
+            const config = await pywebview.api.load_s3_config();
+            const bar = document.getElementById('s3-bar');
+            bar.classList.remove('hidden');
+            if (config) {
+                document.getElementById('s3-status').innerText = 'настроено';
+                document.getElementById('s3-status').classList.replace('text-orange-400', 'text-emerald-600');
+                document.getElementById('s3-upload-path').value = config.s3_path || '';
+            }
+        }
+
+        // Инициализация S3 бара при загрузке
+        window.addEventListener('pywebviewready', () => initS3Bar());
 
         async function pickFolder() {
             const result = await pywebview.api.select_folder();
@@ -116,7 +289,11 @@
                 </div>
                 
                 <div class="flex-1 min-w-0">
-                    <div class="text-sm font-semibold text-slate-800 truncate" title="${data.filename}">${data.filename}</div>
+                    <input type="text" id="name-${id}" value="${normalizeName(data.filename)}"
+                        class="w-full text-sm font-semibold text-slate-800 bg-transparent border-b border-transparent hover:border-slate-300 focus:border-blue-500 focus:bg-white outline-none px-1 py-0.5 rounded transition truncate"
+                        title="Нажмите для редактирования имени файла"
+                        oninput="this.value = normalizeName(this.value)"
+                        onpaste="setTimeout(() => this.value = normalizeName(this.value), 0)">
                     <div class="text-[10px] text-slate-500 mt-1 uppercase font-bold">${data.quality_label || 'JSON'}</div>
                 </div>
 
@@ -158,9 +335,12 @@
 
         function startTask(id) {
             const q = document.getElementById(`select-${id}`).value;
+            const customName = document.getElementById(`name-${id}`).value.trim();
+            const s3Enabled = document.getElementById('s3-enabled').checked;
+            const s3Path = document.getElementById('s3-upload-path').value.trim();
             document.getElementById(`btn-${id}`).disabled = true;
             document.getElementById(`btn-${id}`).classList.add('opacity-30');
-            pywebview.api.start_download(id, q, selectedFolder);
+            pywebview.api.start_download(id, q, selectedFolder, customName, s3Enabled, s3Path || null);
         }
 
         function showLog(id) {

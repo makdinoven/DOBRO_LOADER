@@ -6,6 +6,7 @@ import threading
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 from downloader_logic import KinescopeLogic
+import s3_manager
 
 
 class Api:
@@ -14,6 +15,7 @@ class Api:
         self.tasks = {}  # Храним инфо о задачах: {id: {info, progress_states}}
         # Процессор очереди скачиваний (максимум 3 одновременно)
         self.executor = ThreadPoolExecutor(max_workers=3)
+        self.s3_config = s3_manager.load_config()
 
     def _get_window(self):
         return webview.windows[0] if webview.windows else None
@@ -96,6 +98,39 @@ class Api:
 
         return new_tasks
 
+    def save_s3_config(self, endpoint, access_key, secret_key, bucket, s3_path):
+        """Сохраняет S3/R2 конфиг в зашифрованный файл."""
+        config = {
+            "endpoint": endpoint.strip(),
+            "access_key": access_key.strip(),
+            "secret_key": secret_key.strip(),
+            "bucket": bucket.strip(),
+            "s3_path": s3_path.strip().strip("/"),
+        }
+        s3_manager.save_config(config)
+        self.s3_config = config
+        return True
+
+    def load_s3_config(self):
+        """Возвращает сохранённый S3 конфиг (без secret_key для безопасности)."""
+        config = s3_manager.load_config()
+        if not config:
+            return None
+        return {
+            "endpoint": config.get("endpoint", ""),
+            "access_key": config.get("access_key", ""),
+            "secret_key_set": bool(config.get("secret_key")),
+            "bucket": config.get("bucket", ""),
+            "s3_path": config.get("s3_path", ""),
+        }
+
+    def clear_s3_config(self):
+        """Удаляет сохранённый S3 конфиг."""
+        self.s3_config = None
+        if os.path.exists(s3_manager.CONFIG_FILE):
+            os.remove(s3_manager.CONFIG_FILE)
+        return True
+
     def delete_task(self, task_id):
         if task_id in self.tasks:
             del self.tasks[task_id]
@@ -103,7 +138,7 @@ class Api:
             return True
         return False
 
-    def start_download(self, task_id, quality, custom_folder=None):
+    def start_download(self, task_id, quality, custom_folder=None, custom_name=None, upload_s3=False, s3_path_override=None):
         task = self.tasks.get(task_id)
         if not task: return
 
@@ -114,18 +149,30 @@ class Api:
 
                 base_dir = custom_folder if custom_folder else os.path.dirname(task['path'])
 
+                # Имя файла: кастомное (если задано и отличается от оригинала) или из JSON
+                original_title = task['info']['title'].strip()
+                file_title = custom_name.strip() if custom_name and custom_name.strip() else original_title
+
                 save_path = os.path.join(
                     base_dir,
-                    re.sub(r'[\s\\/:*?"<>|]', '_', task['info']['title'].strip()) + f"_{quality}p.mp4"
+                    re.sub(r'[\s\\/:*?"<>|]', '_', original_title) + f"_{quality}p.mp4"
                 )
 
-                if os.path.exists(save_path):
-                    self.send_log(task_id, f"✅ Файл уже существует: {save_path}. Пропуск.")
+                final_path = os.path.join(
+                    base_dir,
+                    re.sub(r'[\s\\/:*?"<>|]', '_', file_title) + f"_{quality}p.mp4"
+                )
+
+                if os.path.exists(final_path):
+                    self.send_log(task_id, f"✅ Файл уже существует: {final_path}. Пропуск.")
                     self._get_window().evaluate_js(f"updateTaskProgress('{task_id}', 100, 'Уже скачано')")
+                    # Даже если файл уже есть — загрузим в S3 если нужно
+                    if upload_s3:
+                        self._upload_to_s3(task_id, final_path, s3_path_override)
                     return
 
                 self.send_log(task_id, f"🚀 Очередь дошла, старт: {quality}p в {base_dir}")
-                
+
                 try:
                     success = task_logic.download_pipeline(task['info'], quality, save_path)
                 except Exception as e:
@@ -133,6 +180,15 @@ class Api:
                     success = False
 
                 if success:
+                    # Переименовываем файл если задано кастомное имя
+                    if save_path != final_path and os.path.exists(save_path):
+                        os.rename(save_path, final_path)
+                        self.send_log(task_id, f"📝 Переименовано: {os.path.basename(final_path)}")
+
+                    # Загружаем в S3 если включено
+                    if upload_s3:
+                        self._upload_to_s3(task_id, final_path, s3_path_override)
+
                     self.send_log(task_id, "✅ ГОТОВО")
                     self._get_window().evaluate_js(f"updateTaskProgress('{task_id}', 100, 'Завершено')")
                 else:
@@ -146,6 +202,23 @@ class Api:
         self.send_log(task_id, "⏳ Ожидание в очереди...")
         self._get_window().evaluate_js(f"updateTaskProgress('{task_id}', 0, 'В очереди...')")
         self.executor.submit(run)
+
+    def _upload_to_s3(self, task_id, file_path, s3_path_override=None):
+        """Загружает файл в S3/R2."""
+        config = self.s3_config
+        if not config:
+            self.send_log(task_id, "⚠️ S3 не настроен, пропуск загрузки")
+            return
+
+        s3_prefix = s3_path_override.strip().strip("/") if s3_path_override else config.get("s3_path", "")
+        filename = os.path.basename(file_path)
+        s3_key = f"{s3_prefix}/{filename}" if s3_prefix else filename
+
+        self._get_window().evaluate_js(f"updateTaskProgress('{task_id}', 100, 'S3 загрузка...')")
+        s3_manager.upload_file(
+            config, file_path, s3_key,
+            log_fn=lambda msg: self.send_log(task_id, msg),
+        )
 
 
 def main():
