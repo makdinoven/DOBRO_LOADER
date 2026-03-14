@@ -26,15 +26,22 @@ jobs:
       - name: Download ffmpeg
         run: |
           curl -L -o ffmpeg.zip https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip
-          7z x ffmpeg.zip -obin/ffmpeg_tmp
-          $ffdir = Get-ChildItem -Path bin/ffmpeg_tmp -Directory | Select-Object -First 1
+          7z x ffmpeg.zip -offmpeg_tmp
+          $ffdir = Get-ChildItem -Path ffmpeg_tmp -Directory | Select-Object -First 1
+          New-Item -ItemType Directory -Path "bin/ffmpeg" -Force
           Move-Item "$($ffdir.FullName)/bin" "bin/ffmpeg/bin"
-          Remove-Item -Recurse bin/ffmpeg_tmp
+          Remove-Item -Recurse ffmpeg_tmp
         shell: pwsh
 
       - name: Download N_m3u8DL-RE
         run: |
-          curl -L -o bin/N_m3u8DL-RE.exe https://github.com/nilaoda/N_m3u8DL-RE/releases/download/v0.3.1-beta/N_m3u8DL-RE_Beta_win-x64.exe
+          $releases = Invoke-RestMethod "https://api.github.com/repos/nilaoda/N_m3u8DL-RE/releases/latest"
+          $asset = $releases.assets | Where-Object { $_.name -match "win-x64" -and $_.name -match "\.exe$" } | Select-Object -First 1
+          if ($asset) {
+            curl -L -o bin/N_m3u8DL-RE.exe $asset.browser_download_url
+          } else {
+            curl -L -o bin/N_m3u8DL-RE.exe "https://github.com/nilaoda/N_m3u8DL-RE/releases/download/v0.3.1-beta/N_m3u8DL-RE_Beta_win-x64.exe"
+          }
         shell: pwsh
 
       - name: Build EXE
